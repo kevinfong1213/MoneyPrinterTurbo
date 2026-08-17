@@ -1,0 +1,66 @@
+# MoneyPrinterTurbo — VPS 生產 overlay
+#
+# 用法(一定要兩個 -f,呢個係 overlay 唔係完整檔):
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# 設計取態:
+#  · port 繼續綁 127.0.0.1 —— 唔好改。容器內部已經 listen 0.0.0.0,
+#    呢層 127.0.0.1 係宿主機嘅 port mapping,擋住公網直連 8501/8080。
+#    對外一律行 nginx 反代(有 TLS + 密碼),見 nginx/moneyprinterturbo.conf。
+#  · WebUI 本身零認證,所以絕對唔可以將呢兩個 port 開去 0.0.0.0。
+
+services:
+  webui:
+    # browser.serverAddress 只影響 Streamlit 產生俾瀏覽器嘅絕對網址;
+    # 企喺反代後面就一定要填真域名,否則部分跳轉會指返 127.0.0.1。
+    command:
+      - streamlit
+      - run
+      - ./webui/Main.py
+      - --server.address=0.0.0.0
+      - --server.port=8501
+      - --browser.serverAddress=${PUBLIC_HOST:?請喺 .env 設 PUBLIC_HOST,例如 mpt.example.com}
+      - --browser.serverPort=443
+      - --server.enableCORS=true
+      - --server.enableXsrfProtection=true
+      - --browser.gatherUsageStats=false
+      - --client.toolbarMode=minimal
+      - --logger.hideWelcomeMessage=true
+      - --server.showEmailPrompt=false
+    environment:
+      TZ: ${TZ:-Asia/Hong_Kong}
+    # 渲染食 CPU/RAM 好兇。唔設上限嘅話,一條長片可以拖到成部機冇反應
+    # (連你 SSH 都登唔入)。按你部 VPS 實際規格調,唔好照抄。
+    deploy:
+      resources:
+        limits:
+          cpus: "${WEBUI_CPUS:-2}"
+          memory: ${WEBUI_MEM:-4g}
+    # 預設 json-file 冇上限,幾個月後可以食爆成個硬碟
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+  api:
+    environment:
+      TZ: ${TZ:-Asia/Hong_Kong}
+    deploy:
+      resources:
+        limits:
+          cpus: "${API_CPUS:-2}"
+          memory: ${API_MEM:-4g}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
